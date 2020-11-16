@@ -1,15 +1,15 @@
 use ffi::core;
 use ffi::prelude::LLVMBasicBlockRef;
-use std::iter::{Iterator, DoubleEndedIterator, IntoIterator};
+use std::iter::{DoubleEndedIterator, IntoIterator, Iterator};
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
-use value::{Function, Value};
 use util::{self, Sub};
+use value::{Function, Value};
 
 /// A container of instructions that execute sequentially.
 pub struct BasicBlock(PhantomData<[u8]>);
-deref!{BasicBlock, Value}
+deref! {BasicBlock, Value}
 native_ref!(&BasicBlock = LLVMBasicBlockRef);
 
 unsafe impl Sub<Value> for BasicBlock {
@@ -17,9 +17,7 @@ unsafe impl Sub<Value> for BasicBlock {
         unsafe { core::LLVMValueIsBasicBlock(value.into()) != 0 }
     }
     fn from_super(value: &Value) -> Option<&BasicBlock> {
-        unsafe {
-            mem::transmute(core::LLVMValueAsBasicBlock(value.into()))
-        }
+        unsafe { mem::transmute(core::LLVMValueAsBasicBlock(value.into())) }
     }
     fn to_super(&self) -> &Value {
         unsafe { core::LLVMBasicBlockAsValue(self.into()).into() }
@@ -67,13 +65,13 @@ impl BasicBlock {
 /// Iterates through all the blocks contained in a function.
 pub struct BlockIter<'a> {
     pub min: &'a BasicBlock,
-    pub max: &'a BasicBlock
+    pub max: &'a BasicBlock,
 }
 impl<'a> BlockIter<'a> {
     pub fn new(function: &'a Function) -> BlockIter<'a> {
         BlockIter {
             min: unsafe { core::LLVMGetFirstBasicBlock(function.into()).into() },
-            max: unsafe { core::LLVMGetLastBasicBlock(function.into()).into() }
+            max: unsafe { core::LLVMGetLastBasicBlock(function.into()).into() },
         }
     }
 }

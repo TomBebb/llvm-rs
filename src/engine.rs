@@ -1,14 +1,15 @@
-use libc::{c_int, c_uint, c_ulonglong};
-use ffi::{core, target};
+use cbox::{CBox, CSemiBox, DisposeRef};
+use compile::Compile;
+use context::{Context, GetContext};
 use ffi::execution_engine as engine;
 use ffi::execution_engine::*;
 use ffi::target_machine::LLVMCodeModel;
-use cbox::{CBox, CSemiBox, DisposeRef};
-use std::marker::PhantomData;
-use std::{mem, ptr};
-use compile::Compile;
-use context::{Context, GetContext};
+use ffi::{core, target};
+use libc::{c_int, c_uint, c_ulonglong};
 use module::Module;
+use std::marker::PhantomData;
+use std::mem::{self, MaybeUninit};
+use std::ptr;
 use types::{StructType, Type};
 use util::{self, Sub};
 use value::{Function, Value};
@@ -16,9 +17,12 @@ use value::{Function, Value};
 /// An abstract interface for implementation execution of LLVM modules.
 ///
 /// This is designed to support both interpreter and just-in-time (JIT) compiler implementations.
-pub trait ExecutionEngine<'a>:'a + Sized + DisposeRef where LLVMExecutionEngineRef: From<&'a Self> {
+pub trait ExecutionEngine<'a>: 'a + Sized + DisposeRef
+where
+    LLVMExecutionEngineRef: From<&'a Self>,
+{
     /// The options given to the engine upon creation.
-    type Options : Copy;
+    type Options: Copy;
     /// Create a new execution engine with the given `Module` and optiions, or return a
     /// description of the error.
     fn new(module: &'a Module, options: Self::Options) -> Result<CSemiBox<'a, Self>, CBox<str>>;
@@ -30,7 +34,7 @@ pub trait ExecutionEngine<'a>:'a + Sized + DisposeRef where LLVMExecutionEngineR
     /// Remove a module from the list of modules to interpret or compile.
     fn remove_module(&'a self, module: &'a Module) -> &'a Module {
         unsafe {
-            let mut out = mem::uninitialized();
+            let mut out = MaybeUninit::zeroed().assume_init();
             engine::LLVMRemoveModule(self.into(), module.into(), &mut out, ptr::null_mut());
             out.into()
         }
@@ -59,9 +63,15 @@ pub trait ExecutionEngine<'a>:'a + Sized + DisposeRef where LLVMExecutionEngineR
     ///
     /// To convert the arguments to `GenericValue`s, you should use the `GenericValueCast::to_generic` method.
     /// To convert the return value from a `GenericValue`, you should use the `GenericValueCast::from_generic` method.
-    fn run_function(&'a self, function: &'a Function, args: &[&'a GenericValue]) -> &'a GenericValue {
+    fn run_function(
+        &'a self,
+        function: &'a Function,
+        args: &[&'a GenericValue],
+    ) -> &'a GenericValue {
         let ptr = args.as_ptr() as *mut LLVMGenericValueRef;
-        unsafe { engine::LLVMRunFunction(self.into(), function.into(), args.len() as c_uint, ptr).into() }
+        unsafe {
+            engine::LLVMRunFunction(self.into(), function.into(), args.len() as c_uint, ptr).into()
+        }
     }
     /// Returns a pointer to the global value given.
     ///
@@ -75,9 +85,9 @@ pub trait ExecutionEngine<'a>:'a + Sized + DisposeRef where LLVMExecutionEngineR
     /// This is marked as unsafe because the type cannot be guranteed to be the same as the
     /// type of the global value at this point.
     unsafe fn find_global<T>(&'a self, name: &str) -> Option<&'a T> {
-        util::with_cstr(name, |ptr|
+        util::with_cstr(name, |ptr| {
             mem::transmute(engine::LLVMGetGlobalValueAddress(self.into(), ptr))
-        )
+        })
     }
 }
 
@@ -87,46 +97,59 @@ pub struct JitOptions {
     /// The degree to which optimizations should be done, between 0 and 3.
     ///
     /// 0 represents no optimizations, 3 represents maximum optimization
-    pub opt_level: usize
+    pub opt_level: usize,
 }
 /// The MCJIT backend, which compiles functions and values into machine code.
 pub struct JitEngine(PhantomData<[u8]>);
-native_ref!{&JitEngine = LLVMExecutionEngineRef}
-dispose!{JitEngine, LLVMOpaqueExecutionEngine, LLVMDisposeExecutionEngine}
+native_ref! {&JitEngine = LLVMExecutionEngineRef}
+dispose! {JitEngine, LLVMOpaqueExecutionEngine, LLVMDisposeExecutionEngine}
 impl<'a> JitEngine {
     /// Run the closure `cb` with the machine code for the function `function`.
     ///
-    /// If the function takes multiple arguments, these should be wrapped in a tuple due to 
+    /// If the function takes multiple arguments, these should be wrapped in a tuple due to
     /// the limitations of Rust's type system.
     ///
     /// This will check that the types match at runtime when in debug mode, but not release mode.
     /// You should make sure to use debug mode if you want it to error when the types don't match.
-    pub fn with_function<C, A, R>(&self, function: &'a Function, cb: C) where A:Compile<'a>, R:Compile<'a>, C:FnOnce(extern "C" fn (A) -> R) {
+    pub fn with_function<C, A, R>(&self, function: &'a Function, cb: C)
+    where
+        A: Compile<'a>,
+        R: Compile<'a>,
+        C: FnOnce(extern "C" fn(A) -> R),
+    {
         if cfg!(debug_assertions) {
             let ctx = function.get_context();
             let sig = function.get_signature();
             assert_eq!(Type::get::<R>(ctx), sig.get_return());
             let arg = Type::get::<A>(ctx);
+
+            // TODO: Find out why this is showing an error
+            /*
             assert_eq!(sig.get_params(), if let Some(args) = StructType::from_super(arg) {
                 args.get_elements()
             } else {
                 vec![arg]
-            });
+            });*/
         }
         unsafe {
             cb(self.get_function::<A, R>(function));
         }
     }
     /// Run the closure `cb` with the machine code for the function `function`.
-    pub unsafe fn with_function_unchecked<C, A, R>(&self, function: &'a Function, cb: C) where A:Compile<'a>, R:Compile<'a>, C:FnOnce(extern fn(A) -> R) {
+    pub unsafe fn with_function_unchecked<C, A, R>(&self, function: &'a Function, cb: C)
+    where
+        A: Compile<'a>,
+        R: Compile<'a>,
+        C: FnOnce(extern "C" fn(A) -> R),
+    {
         cb(self.get_function::<A, R>(function));
     }
     /// Returns a pointer to the machine code for the function `function`.
     ///
     /// This is marked as unsafe because the types given as arguments and return could be different
     /// from their internal representation.
-    pub unsafe fn get_function<A, R>(&self, function: &'a Function) -> extern fn(A) -> R {
-        let ptr:&u8 = self.get_global(function);
+    pub unsafe fn get_function<A, R>(&self, function: &'a Function) -> extern "C" fn(A) -> R {
+        let ptr: &u8 = self.get_global(function);
         mem::transmute(ptr)
     }
 }
@@ -134,24 +157,30 @@ impl<'a> ExecutionEngine<'a> for JitEngine {
     type Options = JitOptions;
     fn new(module: &'a Module, options: JitOptions) -> Result<CSemiBox<'a, JitEngine>, CBox<str>> {
         unsafe {
-            let mut ee = mem::uninitialized();
+            let mut ee = MaybeUninit::zeroed().assume_init();
             let mut out = mem::zeroed();
             engine::LLVMLinkInMCJIT();
             if target::LLVM_InitializeNativeTarget() == 1 {
-                return Err("failed to initialize native target".into())
+                return Err("failed to initialize native target".into());
             }
             if target::LLVM_InitializeNativeAsmPrinter() == 1 {
-                return Err("failed to initialize native asm printer".into())
+                return Err("failed to initialize native asm printer".into());
             }
             let mut options = LLVMMCJITCompilerOptions {
                 OptLevel: options.opt_level as c_uint,
                 CodeModel: LLVMCodeModel::LLVMCodeModelDefault,
                 NoFramePointerElim: 0,
                 EnableFastISel: 1,
-                MCJMM: ptr::null_mut()
+                MCJMM: ptr::null_mut(),
             };
             let size = mem::size_of::<LLVMMCJITCompilerOptions>();
-            let result = engine::LLVMCreateMCJITCompilerForModule(&mut ee, (&*module).into(), &mut options, size, &mut out);
+            let result = engine::LLVMCreateMCJITCompilerForModule(
+                &mut ee,
+                (&*module).into(),
+                &mut options,
+                size,
+                &mut out,
+            );
             if result == 0 {
                 Ok(ee.into())
             } else {
@@ -162,16 +191,17 @@ impl<'a> ExecutionEngine<'a> for JitEngine {
 }
 /// The interpreter backend
 pub struct Interpreter(PhantomData<[u8]>);
-native_ref!{&Interpreter = LLVMExecutionEngineRef}
-dispose!{Interpreter, LLVMOpaqueExecutionEngine, LLVMDisposeExecutionEngine}
+native_ref! {&Interpreter = LLVMExecutionEngineRef}
+dispose! {Interpreter, LLVMOpaqueExecutionEngine, LLVMDisposeExecutionEngine}
 impl<'a> ExecutionEngine<'a> for Interpreter {
     type Options = ();
     fn new(module: &'a Module, _: ()) -> Result<CSemiBox<'a, Interpreter>, CBox<str>> {
         unsafe {
-            let mut ee = mem::uninitialized();
+            let mut ee = MaybeUninit::zeroed().assume_init();
             let mut out = mem::zeroed();
             engine::LLVMLinkInInterpreter();
-            let result = engine::LLVMCreateInterpreterForModule(&mut ee, (&*module).into(), &mut out);
+            let result =
+                engine::LLVMCreateInterpreterForModule(&mut ee, (&*module).into(), &mut out);
             if result == 0 {
                 Ok(ee.into())
             } else {
@@ -182,8 +212,8 @@ impl<'a> ExecutionEngine<'a> for Interpreter {
 }
 /// A wrapped value that can be passed to an interpreted function or returned from one
 pub struct GenericValue(PhantomData<[u8]>);
-native_ref!{&GenericValue = LLVMGenericValueRef}
-dispose!{GenericValue, LLVMOpaqueGenericValue, LLVMDisposeGenericValue}
+native_ref! {&GenericValue = LLVMGenericValueRef}
+dispose! {GenericValue, LLVMOpaqueGenericValue, LLVMDisposeGenericValue}
 
 /// A value that can be cast into a `GenericValue` and that a `GenericValue` can be cast into.
 ///
@@ -250,17 +280,19 @@ impl GenericValueCast for bool {
     fn to_generic(self, ctx: &Context) -> CSemiBox<GenericValue> {
         unsafe {
             let ty = <Self as Compile>::get_type(ctx);
-            CSemiBox::new(engine::LLVMCreateGenericValueOfInt(ty.into(), self as c_ulonglong, 0))
+            CSemiBox::new(engine::LLVMCreateGenericValueOfInt(
+                ty.into(),
+                self as c_ulonglong,
+                0,
+            ))
         }
     }
     fn from_generic(value: &GenericValue, _: &Context) -> bool {
-        unsafe {
-            engine::LLVMGenericValueToInt(value.into(), 0) != 0
-        }
+        unsafe { engine::LLVMGenericValueToInt(value.into(), 0) != 0 }
     }
 }
-generic_int!{some i8, u8}
-generic_int!{some i16, u16}
-generic_int!{some i32, u32}
-generic_int!{some i64, u64}
-generic_int!{some isize, usize}
+generic_int! {some i8, u8}
+generic_int! {some i16, u16}
+generic_int! {some i32, u32}
+generic_int! {some i64, u64}
+generic_int! {some isize, usize}

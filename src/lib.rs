@@ -4,34 +4,38 @@
 //! The original LLVM reference is available [here](http://llvm.org/doxygen/)
 //! but take note that this isn't as thorough as this documentation.
 
-extern crate llvm_sys as ffi;
-extern crate libc;
 extern crate cbox;
+extern crate libc;
+extern crate llvm_sys as ffi;
 
 #[macro_use]
 mod macros;
-mod buffer;
+mod binary;
 mod block;
+mod buffer;
 mod builder;
 mod compile;
 mod context;
 mod engine;
 mod module;
-mod object;
 mod target;
 pub mod types;
-pub mod value;
 mod util;
+pub mod value;
 
-pub use cbox::{CBox, CSemiBox};
-pub use builder::Builder;
+pub use binary::{Binary, BinaryType};
 pub use block::BasicBlock;
+pub use builder::Builder;
+pub use cbox::{CBox, CSemiBox};
 pub use compile::Compile;
 pub use context::{Context, GetContext};
-pub use engine::{JitEngine, JitOptions, Interpreter, ExecutionEngine, GenericValue, GenericValueCast};
-pub use module::{AddressSpace, Module, Functions};
-pub use object::{ObjectFile, Symbol, Symbols};
-pub use target::{TargetData, Target};
+pub use engine::{
+    ExecutionEngine, GenericValue, GenericValueCast, Interpreter, JitEngine, JitOptions,
+};
+pub use module::{AddressSpace, Functions, Module};
+pub use target::{Target, TargetData};
 pub use types::*;
-pub use value::{Alias, Arg, Attribute, Value, Function, GlobalValue, GlobalVariable, Linkage, Predicate};
 pub use util::Sub;
+pub use value::{
+    Alias, Attribute, Function, GlobalValue, GlobalVariable, Linkage, Param, Predicate, Value,
+};

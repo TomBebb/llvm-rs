@@ -20,7 +20,10 @@ pub unsafe trait Sub<T>: Sized {
     }
 }
 #[inline(always)]
-pub fn with_cstr<C, R>(text: &str, cb: C) -> R where C:FnOnce(*const c_char) -> R {
+pub fn with_cstr<C, R>(text: &str, cb: C) -> R
+where
+    C: FnOnce(*const c_char) -> R,
+{
     let c_text = CString::new(text).unwrap();
     cb(c_text.as_bytes().as_ptr() as *const c_char)
 }
@@ -38,7 +41,10 @@ pub unsafe fn to_null_str<'a>(text: *mut c_char) -> Option<&'a str> {
         Some(to_str(text))
     }
 }
-pub unsafe fn ptr_to_null<P, T>(ptr: *mut P) -> Option<T> where T:From<*mut P> {
+pub unsafe fn ptr_to_null<P, T>(ptr: *mut P) -> Option<T>
+where
+    T: From<*mut P>,
+{
     if ptr.is_null() {
         None
     } else {

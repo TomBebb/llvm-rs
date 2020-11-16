@@ -1,26 +1,27 @@
-use libc::{c_char, c_uint};
-use ffi::prelude::{LLVMValueRef, LLVMModuleRef};
-use ffi::analysis::LLVMVerifierFailureAction;
-use ffi::{analysis, core, linker, LLVMModule};
-use ffi::transforms::pass_manager_builder as builder;
-use ffi::transforms::ipo as ipo;
-use ffi::bit_writer as writer;
-use ffi::bit_reader as reader;
-use ffi::ir_reader;
-use cbox::{CBox, CSemiBox};
-use std::ffi::CString;
-use std::iter::{Iterator, IntoIterator};
-use std::io::{Error, ErrorKind};
-use std::io::Result as IoResult;
-use std::{env, fmt, mem};
-use std::marker::PhantomData;
-use std::path::Path;
-use std::process::{Command, Child};
 use buffer::MemoryBuffer;
+use cbox::CBox;
 use context::{Context, GetContext};
-use value::{Alias, Function, GlobalValue, GlobalVariable, Value};
+use ffi::analysis::LLVMVerifierFailureAction;
+use ffi::bit_reader as reader;
+use ffi::bit_writer as writer;
+use ffi::ir_reader;
+use ffi::prelude::{LLVMModuleRef, LLVMValueRef};
+use ffi::transforms::ipo;
+use ffi::transforms::pass_manager_builder as builder;
+use ffi::{analysis, core, linker, LLVMModule};
+use libc::{c_char, c_uint};
+use std::ffi::CString;
+use std::io::Result as IoResult;
+use std::io::{Error, ErrorKind};
+use std::iter::{IntoIterator, Iterator};
+use std::marker::PhantomData;
+use std::mem::MaybeUninit;
+use std::path::Path;
+use std::process::{Child, Command};
+use std::{env, fmt};
 use types::Type;
 use util;
+use value::{Alias, Function, GlobalValue, GlobalVariable, Value};
 
 /// Represents a single compilation unit of code.
 ///
@@ -40,9 +41,9 @@ impl Module {
     /// let module = Module::new("name", &context);
     /// println!("{:?}", module)
     /// ```
-    pub fn new<'a>(name: &str, context: &'a Context) -> CSemiBox<'a, Module> {
+    pub fn new<'a>(name: &str, context: &'a Context) -> &'a Module {
         let c_name = CString::new(name).unwrap();
-        unsafe { CSemiBox::new(core::LLVMModuleCreateWithNameInContext(c_name.as_ptr(), context.into())) }
+        unsafe { core::LLVMModuleCreateWithNameInContext(c_name.as_ptr(), context.into()).into() }
     }
     /// Add a global to the module with the given type and name.
     pub fn add_global<'a>(&'a self, name: &str, ty: &'a Type) -> &'a GlobalVariable {
@@ -51,7 +52,12 @@ impl Module {
         })
     }
     /// Add a global variable to the module with the given type, name and initial value.
-    pub fn add_global_in_address_space<'a>(&'a self, name: &str, ty: &'a Type, address: AddressSpace) -> &'a GlobalVariable {
+    pub fn add_global_in_address_space<'a>(
+        &'a self,
+        name: &str,
+        ty: &'a Type,
+        address: AddressSpace,
+    ) -> &'a GlobalVariable {
         util::with_cstr(name, |ptr| unsafe {
             core::LLVMAddGlobalInAddressSpace(self.into(), ty.into(), ptr, address as u32).into()
         })
@@ -76,15 +82,14 @@ impl Module {
         })
     }
     /// Parse this bitcode file into a module, or return an error string.
-    pub fn parse_bitcode<'a>(context: &'a Context, path: &str) -> Result<CSemiBox<'a, Module>, CBox<str>> {
+    pub fn parse_bitcode<'a>(context: &'a Context, path: &str) -> Result<&'a Module, CBox<str>> {
         unsafe {
-            let mut out = mem::uninitialized();
-            let mut err = mem::uninitialized();
-            let buf = try!(MemoryBuffer::new_from_file(path));
-            if reader::LLVMParseBitcodeInContext(context.into(), buf.as_ptr(), &mut out, &mut err) == 1 {
-                Err(CBox::new(err))
+            let mut out = MaybeUninit::zeroed().assume_init();
+            let buf = MemoryBuffer::new_from_file(path)?;
+            if reader::LLVMParseBitcodeInContext2(context.into(), buf.as_ptr(), &mut out) == 1 {
+                Err(CBox::from("???"))
             } else {
-                Ok(CSemiBox::new(out))
+                Ok(out.into())
             }
         }
     }
@@ -92,22 +97,27 @@ impl Module {
     pub fn write_bitcode(&self, path: &str) -> IoResult<()> {
         util::with_cstr(path, |cpath| unsafe {
             if writer::LLVMWriteBitcodeToFile(self.into(), cpath) != 0 {
-                Err(Error::new(ErrorKind::Other, &format!("could not write to {}", path) as &str))
+                Err(Error::new(
+                    ErrorKind::Other,
+                    &format!("could not write to {}", path) as &str,
+                ))
             } else {
                 Ok(())
             }
         })
     }
     /// Parse IR assembly unto a module, or return an error string.
-    pub fn parse_ir_from_str<'a>(context: &'a Context, s: &str) -> Result<CSemiBox<'a, Module>, CBox<str>> {
+    pub fn parse_ir_from_str<'a>(context: &'a Context, s: &str) -> Result<&'a Module, CBox<str>> {
         unsafe {
-            let mut out = mem::uninitialized();
-            let mut err = mem::uninitialized();
-            let buf = try!(MemoryBuffer::new_from_str(s, None));
-            if ir_reader::LLVMParseIRInContext(context.into(), buf.as_ptr(), &mut out, &mut err) == 1 {
+            let mut out = MaybeUninit::zeroed().assume_init();
+            let mut err = MaybeUninit::zeroed().assume_init();
+            let buf = MemoryBuffer::new_from_str(s, None)?;
+            if ir_reader::LLVMParseIRInContext(context.into(), buf.as_ptr(), &mut out, &mut err)
+                == 1
+            {
                 Err(CBox::new(err))
             } else {
-                Ok(CSemiBox::new(out))
+                Ok(out.into())
             }
         }
     }
@@ -133,8 +143,8 @@ impl Module {
         }
     }
     /// Clone this module.
-    pub fn clone<'a>(&'a self) -> CSemiBox<'a, Module> {
-        CSemiBox::new(unsafe { core::LLVMCloneModule(self.into()) })
+    pub fn clone<'a>(&'a self) -> &'a Module {
+        unsafe { core::LLVMCloneModule(self.into()) }.into()
     }
 
     /// Optimize this module with the given optimization level and size level.
@@ -149,7 +159,10 @@ impl Module {
             let pass_manager = core::LLVMCreatePassManager();
 
             if opt_level > 1 {
-                builder::LLVMPassManagerBuilderUseInlinerWithThreshold(builder, size_level as c_uint);
+                builder::LLVMPassManagerBuilderUseInlinerWithThreshold(
+                    builder,
+                    size_level as c_uint,
+                );
             } else {
                 // otherwise, we will add the builder to the top of the list of passes.
                 // This is not exactly what llvm-opt does, but it is pretty close
@@ -180,7 +193,7 @@ impl Module {
     /// when an error occurs.
     pub fn verify(&self) -> Result<(), CBox<str>> {
         unsafe {
-            let mut error = mem::uninitialized();
+            let mut error = MaybeUninit::zeroed().assume_init();
             let action = LLVMVerifierFailureAction::LLVMReturnStatusAction;
             if analysis::LLVMVerifyModule(self.into(), action, &mut error) == 1 {
                 Err(CBox::new(error))
@@ -199,41 +212,24 @@ impl Module {
         let path = path.to_str().unwrap();
         let mod_path = dir.join("module.bc");
         let mod_path = mod_path.to_str().unwrap();
-        try!(self.write_bitcode(mod_path));
+        self.write_bitcode(mod_path)?;
         Command::new("llc")
             .arg(&format!("-O={}", opt_level))
             .arg("-filetype=obj")
-            .arg("-o").arg(path)
+            .arg("-o")
+            .arg(path)
             .arg(mod_path)
             .spawn()
     }
 
-    /// Link a module into this module, returning an error string if an error occurs.
-    ///
+    /// Link a module into this module
     /// This *does not* destroy the source module.
-    pub fn link(&self, src: &Module) -> Result<(), CBox<str>> {
+    pub fn link(&self, src: &Module) -> Result<(), ()> {
         unsafe {
             let dest = self.into();
             let src = src.into();
-            let mut message = mem::uninitialized();
-            if linker::LLVMLinkModules(dest, src, linker::LLVMLinkerMode::LLVMLinkerPreserveSource, &mut message) == 1 {
-                Err(CBox::new(message))
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    /// Link a module into this module, returning an error string if an error occurs.
-    ///
-    /// This *does* destroy the source module.
-    pub fn link_destroy(&self, src: CSemiBox<Module>) -> Result<(), CBox<str>> {
-        unsafe {
-            let dest = self.into();
-            let src = src.as_ptr();
-            let mut message = mem::uninitialized();
-            if linker::LLVMLinkModules(dest, src, linker::LLVMLinkerMode::LLVMLinkerDestroySource, &mut message) == 1 {
-                Err(CBox::new(message))
+            if linker::LLVMLinkModules2(dest, src) == 1 {
+                Err(())
             } else {
                 Ok(())
             }
@@ -248,19 +244,18 @@ impl<'a> IntoIterator for &'a Module {
         Functions {
             index: 0,
             value: unsafe { core::LLVMGetFirstFunction(self.into()) },
-            marker: PhantomData
+            marker: PhantomData,
         }
     }
 }
 get_context!(Module, LLVMGetModuleContext);
 to_str!(Module, LLVMPrintModuleToString);
-dispose!(Module, LLVMModule, core::LLVMDisposeModule);
 #[derive(Copy, Clone)]
 /// An iterator through the functions contained in a module.
 pub struct Functions<'a> {
     index: usize,
     value: LLVMValueRef,
-    marker: PhantomData<&'a ()>
+    marker: PhantomData<&'a ()>,
 }
 impl<'a> Iterator for Functions<'a> {
     type Item = &'a Function;

@@ -1,7 +1,7 @@
+use cbox::CBox;
 use ffi::prelude::LLVMContextRef;
 use ffi::{core, LLVMContext};
 use std::marker::PhantomData;
-use cbox::CBox;
 
 /// Contains all the LLVM entities - mainly modules.
 ///

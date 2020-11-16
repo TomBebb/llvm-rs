@@ -1,12 +1,12 @@
-use libc::{c_uint, c_ulonglong};
+use context::Context;
 use ffi::core;
 use ffi::prelude::LLVMValueRef;
-use context::Context;
 use libc::c_char;
-use value::Value;
-use types::*;
-use std::mem;
+use libc::{c_uint, c_ulonglong};
 use std::ffi::CStr;
+use std::mem;
+use types::*;
+use value::Value;
 
 /// A type that can be represented as a constant in LLVM IR.
 pub trait Compile<'a> {
@@ -66,7 +66,14 @@ impl<'a> Compile<'a> for f64 {
 }
 impl<'a> Compile<'a> for char {
     fn compile(self, context: &'a Context) -> &'a Value {
-        unsafe { core::LLVMConstInt(Self::get_type(context).into(), self as u32 as c_ulonglong, 0) }.into()
+        unsafe {
+            core::LLVMConstInt(
+                Self::get_type(context).into(),
+                self as u32 as c_ulonglong,
+                0,
+            )
+        }
+        .into()
     }
     fn get_type(ctx: &'a Context) -> &'a Type {
         unsafe { core::LLVMInt32TypeInContext(ctx.into()) }.into()
@@ -115,11 +122,11 @@ impl<'a, 'b> Compile<'a> for &'b [u8] {
         StructType::new(ctx, &[usize_t, usize_t], false)
     }
 }
-compile_int!{u8, i8, LLVMInt8TypeInContext}
-compile_int!{u16, i16, LLVMInt16TypeInContext}
-compile_int!{u32, i32, LLVMInt32TypeInContext}
-compile_int!{u64, i64, LLVMInt64TypeInContext}
-compile_int!{usize, isize, ctx => core::LLVMIntTypeInContext(ctx, mem::size_of::<isize>() as c_uint * 8)}
+compile_int! {u8, i8, LLVMInt8TypeInContext}
+compile_int! {u16, i16, LLVMInt16TypeInContext}
+compile_int! {u32, i32, LLVMInt32TypeInContext}
+compile_int! {u64, i64, LLVMInt64TypeInContext}
+compile_int! {usize, isize, ctx => core::LLVMIntTypeInContext(ctx, mem::size_of::<isize>() as c_uint * 8)}
 impl<'a> Compile<'a> for () {
     fn compile(self, context: &'a Context) -> &'a Value {
         unsafe { core::LLVMConstNull(Self::get_type(context).into()) }.into()
@@ -142,12 +149,12 @@ macro_rules! compile_tuple(
         }
     )
 );
-compile_tuple!{A = a, B = b}
-compile_tuple!{A = a, B = b, C = c}
-compile_tuple!{A = a, B = b, C = c, D = d}
-compile_tuple!{A = a, B = b, C = c, D = d, E = e}
-compile_tuple!{A = a, B = b, C = c, D = d, E = e, F = f}
-compile_tuple!{A = a, B = b, C = c, D = d, E = e, F = f, G = g}
+compile_tuple! {A = a, B = b}
+compile_tuple! {A = a, B = b, C = c}
+compile_tuple! {A = a, B = b, C = c, D = d}
+compile_tuple! {A = a, B = b, C = c, D = d, E = e}
+compile_tuple! {A = a, B = b, C = c, D = d, E = e, F = f}
+compile_tuple! {A = a, B = b, C = c, D = d, E = e, F = f, G = g}
 
 macro_rules! compile_array(
     ($ty:ty, $num:expr) => (
@@ -162,13 +169,13 @@ macro_rules! compile_array(
         }
     )
 );
-compile_array!{[T; 0], 0}
-compile_array!{[T; 1], 1}
-compile_array!{[T; 2], 2}
-compile_array!{[T; 3], 3}
-compile_array!{[T; 4], 4}
-compile_array!{[T; 5], 5}
-compile_array!{[T; 6], 6}
+compile_array! {[T; 0], 0}
+compile_array! {[T; 1], 1}
+compile_array! {[T; 2], 2}
+compile_array! {[T; 3], 3}
+compile_array! {[T; 4], 4}
+compile_array! {[T; 5], 5}
+compile_array! {[T; 6], 6}
 
 macro_rules! compile_func(
     ($($name:ident),*) => (
@@ -198,11 +205,11 @@ macro_rules! compile_func(
         }
     )
 );
-compile_func!{}
-compile_func!{A}
-compile_func!{A, B}
-compile_func!{A, B, C}
-compile_func!{A, B, C, D}
-compile_func!{A, B, C, D, E}
-compile_func!{A, B, C, D, E, F}
-compile_func!{A, B, C, D, E, F, G}
+compile_func! {}
+compile_func! {A}
+compile_func! {A, B}
+compile_func! {A, B, C}
+compile_func! {A, B, C, D}
+compile_func! {A, B, C, D, E}
+compile_func! {A, B, C, D, E, F}
+compile_func! {A, B, C, D, E, F, G}
